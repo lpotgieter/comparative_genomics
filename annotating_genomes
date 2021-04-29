@@ -1,6 +1,7 @@
 ##
-#These are just a few bits and bobs that I find really useful when starting a comparative genomics project. Maybe you will find it useful! 
+#These are just a few bits and bobs that I find really useful when starting a comparative genomics project. Maybe you will find it useful, too! 
 #(and maybe I will learn to keep my scripts organised...)
+#General overview of QC, filtering, annotation, functional gene prediction, ortholog determination, species tree construction.
 
 
 ##
@@ -16,10 +17,8 @@ python2 /quast-4.6.2/quast.py INPUT_FASTA1.fasta INPUT_FASTA2.fasta -o INPUT_RAW
 #Since I am currently working with Cercospora species, I use magnaporthe_grisea as a training model.
 #Here is just a simple little bash line for this:
 
-for f1 in /your/directory/*.fasta
-do
-augustus --species=magnaporthe_grisea ${f1} --gff3=on --stopCodonExcludedFromCDS=false --genemodel=complete > ${f1}.gff
-done
+for f1 in /your/directory/*.fasta ; 
+do augustus --species=magnaporthe_grisea ${f1} --gff3=on --stopCodonExcludedFromCDS=false --genemodel=complete > ${f1}.gff ; done
 
 ##
 #To get the CDS and protein sequences from the resulting GFF, Augustus has a nice little perl script called getAnno
@@ -32,3 +31,52 @@ perl /Augustus/scripts/getAnnoFasta.pl GFF_FROM_ABOVE.gff --seqfile=FASTA_FROM_A
 
 ##
 #To find proteins that have signal peptides and are potentially effectors, I use SignalP and EffectorP
+#These tools, and many others are here: https://services.healthtech.dtu.dk/software.php
+#Here I used SignalP 5.0
+for f1 in YOUR_AA_SEQ*.aa ; do ./signalp -fasta ${f1} -mature ; done
+
+#Now, you can extract the lines that represent genes that are signal peptides by simply excluding genes that are not signal peptides
+#If you want a list of only non-signal peptides, just remove the exclamation mark.
+#You will use this list to extract the coordinates from the GFF from Augustus to make circos plots!
+#Extract from the summary
+awk '$2 !~ /OTHER/' YOUR_AA_SEQ*.signalp5 > YOUR_AA_SEQ_signalpeptides*.signal.only
+awk '{print $1}' *YOUR_AA_SEQ_signalpeptides.signal.only > *YOUR_AA_SEQ_signalpeptides.signal.only.namelist
+
+#EffectorP3.0 for effector prediction (https://github.com/JanaSperschneider/EffectorP-3.0)
+for file in YOUR_AA_SEQ*.aa; do python EffectorP.py -i $file -o $file.effectorp -E $file.effectorp.fasta; done
+
+
+##
+#To find orthologous genes, I like using proteinortho (http://www.bioinf.uni-leipzig.de/Software/proteinortho/)
+#I use blastp rather than diamond to run proteinortho, so my command is:
+proteinortho -project=cercospora.aa -cpus=22 -p=blastp LIST_OF_YOUR_AA_SEQ_FILES
+#The following are the default parameters I used
+#Parameter-vector : (version=6.0.14,step=0,verbose=1,debug=0,exactstep3=0,synteny=0,duplication=2,cs=3,alpha=0.5,connectivity=0.1,cpus=22,evalue=1e-05,purity=1e-07,coverage=50,identity=25,blastmode=blastp+,sim=0.95,report=3,keep=0,force=0,selfblast=0,twilight=0,singles=0,clean=0,blastOptions=,nograph=0,xml=0,desc=0,tmp_path=./proteinortho_cache_cercospora.aa/,blastversion=unknown,binpath=,makedb=,blast=,jobs_todo=0,project=cercospora.aa,po_path=/usr/bin/,run_id=,threads_per_process=1,useMcl=0,freemem=-1)
+
+#To get single copy orthologs from the resulting .tsv. I had 11 species, so you can just change the 11 to match your number of species.
+#Then, take the first line of the original .tsv, and merge with the aa.single.copy file as it contains the identifiers
+awk '$2 ~ /^11$/'  proteinortho.tsv > aa.single.copy
+awk 'NR==1 {print; exit}' proteinortho.tsv > tsv.header
+paste tsv.header > aa.single.copy
+
+#Now, you can use a neat tool from proteinortho to extract each ortho group into a separate file
+perl proteinortho_grab_proteins.pl -tofiles aa.single.copy YOUR_AA_SEQ*.aa
+
+##
+#For this next section, I have Laura Ruppert to thank!
+#Now that you have unique files for each orthogroup, align each group separately with MUSCLE. 
+#Quick install
+conda install -c bioconda muscle
+#Run
+for file in *.fasta; do muscle -in "$file" -out "output_dir/${file/%fasta/muscle.fa.algn}"; done
+
+#To make the corresponding species tree, IQTree is really nice. We'll also use it for ancestral state reconstruction
+#Quick install
+conda install -c bioconda iqtree
+#Run
+for file in *.muscle.fna.algn; do iqtree -s "$file" -m TEST -bb 1000 -pre "$file" -nt AUTO; done
+#-s = input file
+#-m TEST = IQTree first selects best-fit model
+#-bb 1000 = bootstrap approximation
+
+
